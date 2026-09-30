@@ -12,7 +12,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       name?: string;
       type?: 'max_discount' | 'forbidden_topic' | 'escalation_keyword' | 'max_response_length' | 'require_approval' | 'custom';
       config?: Record<string, unknown>;
-      is_active?: number;
+      is_active?: boolean;
     };
 
     const guardrail = await updateGuardrail(id, { name, type, config, is_active });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prepare } from '@/lib/db';
+import { supabase } from '@/lib/db';
 import { logger } from '@/lib/logger';
 
 type Params = { params: Promise<{ id: string }> };
@@ -13,27 +13,26 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       api_key?: string;
       base_url?: string;
       models?: string[];
-      is_active?: number;
+      is_active?: boolean;
     };
 
-    const fields: string[] = [];
-    const values: unknown[] = [];
+    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (name !== undefined) updates.name = name;
+    if (api_key !== undefined) updates.api_key = api_key;
+    if (base_url !== undefined) updates.base_url = base_url;
+    if (models !== undefined) updates.models = models;
+    if (is_active !== undefined) updates.is_active = is_active;
 
-    if (name !== undefined) { fields.push('name = ?'); values.push(name); }
-    if (api_key !== undefined) { fields.push('api_key = ?'); values.push(api_key); }
-    if (base_url !== undefined) { fields.push('base_url = ?'); values.push(base_url); }
-    if (models !== undefined) { fields.push('models = ?'); values.push(JSON.stringify(models)); }
-    if (is_active !== undefined) { fields.push('is_active = ?'); values.push(is_active); }
-
-    if (fields.length === 0) {
+    if (Object.keys(updates).length === 1) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
     }
 
-    fields.push("updated_at = datetime('now')");
-    values.push(id);
+    const { error } = await supabase
+      .from('llm_providers')
+      .update(updates)
+      .eq('id', id);
 
-    const stmt = await prepare(`UPDATE llm_providers SET ${fields.join(', ')} WHERE id = ?`);
-    await stmt.run(...values);
+    if (error) throw new Error(error.message);
 
     logger.info('llm', `Provider updated: ${id}`);
     return NextResponse.json({ success: true });
@@ -47,12 +46,12 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 export async function DELETE(_request: NextRequest, { params }: Params) {
   try {
     const { id } = await params;
-    const stmt = await prepare('DELETE FROM llm_providers WHERE id = ?');
-    const result = await stmt.run(id);
+    const { error } = await supabase
+      .from('llm_providers')
+      .delete()
+      .eq('id', id);
 
-    if (result.changes === 0) {
-      return NextResponse.json({ error: 'Provider not found' }, { status: 404 });
-    }
+    if (error) throw new Error(error.message);
 
     logger.info('llm', `Provider deleted: ${id}`);
     return NextResponse.json({ success: true });

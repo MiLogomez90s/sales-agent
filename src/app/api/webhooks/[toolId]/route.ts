@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToolById } from '@/lib/tools/registry';
 import { logger } from '@/lib/logger';
-import { prepare } from '@/lib/db';
+import { supabase } from '@/lib/db';
 
 type Params = { params: Promise<{ toolId: string }> };
 
@@ -23,16 +23,15 @@ export async function POST(request: NextRequest, { params }: Params) {
     });
 
     // Store the webhook payload as a log entry for the agent to process
-    const stmt = await prepare(
-      'INSERT INTO messages (conversation_id, role, content, tool_calls, tool_call_id) VALUES (?, ?, ?, ?, ?)'
-    );
-    await stmt.run(
-      'webhook_inbox',
-      'tool',
-      JSON.stringify({ tool: tool.name, payload: body, headers, received_at: new Date().toISOString() }),
-      null,
-      null
-    );
+    const { error } = await supabase
+      .from('messages')
+      .insert({
+        conversation_id: 'webhook_inbox',
+        role: 'tool',
+        content: JSON.stringify({ tool: tool.name, payload: body, headers, received_at: new Date().toISOString() }),
+      });
+
+    if (error) throw new Error(error.message);
 
     return NextResponse.json({
       success: true,

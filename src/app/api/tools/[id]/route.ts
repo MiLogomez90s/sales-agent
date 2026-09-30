@@ -15,7 +15,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       description?: string;
       type?: 'http' | 'webhook';
       config?: ToolConfig;
-      is_active?: number;
+      is_active?: boolean;
     };
 
     if (config) {

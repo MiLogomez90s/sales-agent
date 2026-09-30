@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb, prepare } from '@/lib/db';
+import { supabase } from '@/lib/db';
 import { AgentConfig } from '@/lib/db/types';
 import { logger } from '@/lib/logger';
 
 export async function GET() {
   try {
-    const stmt = await prepare('SELECT * FROM agent_config WHERE id = 1');
-    const config = (await stmt.get()) as AgentConfig;
-    return NextResponse.json({ config });
+    const { data, error } = await supabase
+      .from('agent_config')
+      .select('*')
+      .eq('id', 1)
+      .single();
+
+    if (error) throw new Error(error.message);
+    return NextResponse.json({ config: data as AgentConfig });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ error: message }, { status: 500 });
@@ -19,28 +24,27 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { system_prompt, model, temperature, max_tokens, language } = body as Partial<AgentConfig>;
 
-    const fields: string[] = [];
-    const values: unknown[] = [];
+    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (system_prompt !== undefined) updates.system_prompt = system_prompt;
+    if (model !== undefined) updates.model = model;
+    if (temperature !== undefined) updates.temperature = temperature;
+    if (max_tokens !== undefined) updates.max_tokens = max_tokens;
+    if (language !== undefined) updates.language = language;
 
-    if (system_prompt !== undefined) { fields.push('system_prompt = ?'); values.push(system_prompt); }
-    if (model !== undefined) { fields.push('model = ?'); values.push(model); }
-    if (temperature !== undefined) { fields.push('temperature = ?'); values.push(temperature); }
-    if (max_tokens !== undefined) { fields.push('max_tokens = ?'); values.push(max_tokens); }
-    if (language !== undefined) { fields.push('language = ?'); values.push(language); }
-
-    if (fields.length === 0) {
+    if (Object.keys(updates).length === 1) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
     }
 
-    fields.push("updated_at = datetime('now')");
+    const { data, error } = await supabase
+      .from('agent_config')
+      .update(updates)
+      .eq('id', 1)
+      .select()
+      .single();
 
-    const stmt = await prepare(`UPDATE agent_config SET ${fields.join(', ')} WHERE id = 1`);
-    await stmt.run(...values);
-
-    const selectStmt = await prepare('SELECT * FROM agent_config WHERE id = 1');
-    const config = (await selectStmt.get()) as AgentConfig;
+    if (error) throw new Error(error.message);
     logger.info('config', 'Agent config updated', { fields: Object.keys(body) });
-    return NextResponse.json({ config });
+    return NextResponse.json({ config: data as AgentConfig });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     logger.error('config', `Config update error: ${message}`);

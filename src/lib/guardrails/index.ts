@@ -1,12 +1,12 @@
-import { getDb, prepare } from '@/lib/db';
+import { supabase } from '@/lib/db';
 import { logger } from '@/lib/logger';
 
 export interface Guardrail {
   id: string;
   name: string;
   type: 'max_discount' | 'forbidden_topic' | 'escalation_keyword' | 'max_response_length' | 'require_approval' | 'custom';
-  config: string;
-  is_active: number;
+  config: Record<string, unknown>;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -25,28 +25,41 @@ export interface GuardrailCheckResult {
 export async function createGuardrail(input: GuardrailInput): Promise<Guardrail> {
   const id = `guard_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  const stmt = await prepare(
-    'INSERT INTO guardrails (id, name, type, config) VALUES (?, ?, ?, ?)'
-  );
-  await stmt.run(id, input.name, input.type, JSON.stringify(input.config));
+  const { data, error } = await supabase
+    .from('guardrails')
+    .insert({ id, name: input.name, type: input.type, config: input.config })
+    .select()
+    .single();
 
+  if (error) throw new Error(error.message);
   logger.debug('guardrails', `Guardrail created: ${input.name}`, { type: input.type });
-  return (await getGuardrailById(id))!;
+  return data as Guardrail;
 }
 
 export async function getGuardrailById(id: string): Promise<Guardrail | null> {
-  const stmt = await prepare('SELECT * FROM guardrails WHERE id = ?');
-  return ((await stmt.get(id)) as Guardrail) || null;
+  const { data } = await supabase
+    .from('guardrails')
+    .select('*')
+    .eq('id', id)
+    .single();
+  return (data as Guardrail) || null;
 }
 
 export async function getActiveGuardrails(): Promise<Guardrail[]> {
-  const stmt = await prepare('SELECT * FROM guardrails WHERE is_active = 1 ORDER BY created_at ASC');
-  return (await stmt.all()) as Guardrail[];
+  const { data } = await supabase
+    .from('guardrails')
+    .select('*')
+    .eq('is_active', true)
+    .order('created_at', { ascending: true });
+  return (data as Guardrail[]) || [];
 }
 
 export async function getAllGuardrails(): Promise<Guardrail[]> {
-  const stmt = await prepare('SELECT * FROM guardrails ORDER BY created_at ASC');
-  return (await stmt.all()) as Guardrail[];
+  const { data } = await supabase
+    .from('guardrails')
+    .select('*')
+    .order('created_at', { ascending: true });
+  return (data as Guardrail[]) || [];
 }
 
 export async function updateGuardrail(
@@ -55,34 +68,26 @@ export async function updateGuardrail(
     name?: string;
     type?: Guardrail['type'];
     config?: Record<string, unknown>;
-    is_active?: number;
+    is_active?: boolean;
   }
 ): Promise<Guardrail | null> {
-  const guardrail = await getGuardrailById(id);
-  if (!guardrail) return null;
+  const { data, error } = await supabase
+    .from('guardrails')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
 
-  const fields: string[] = [];
-  const values: unknown[] = [];
-
-  if (updates.name !== undefined) { fields.push('name = ?'); values.push(updates.name); }
-  if (updates.type !== undefined) { fields.push('type = ?'); values.push(updates.type); }
-  if (updates.config !== undefined) { fields.push('config = ?'); values.push(JSON.stringify(updates.config)); }
-  if (updates.is_active !== undefined) { fields.push('is_active = ?'); values.push(updates.is_active); }
-
-  if (fields.length === 0) return guardrail;
-
-  fields.push("updated_at = datetime('now')");
-  values.push(id);
-
-  const stmt = await prepare(`UPDATE guardrails SET ${fields.join(', ')} WHERE id = ?`);
-  await stmt.run(...values);
-  return getGuardrailById(id);
+  if (error) throw new Error(error.message);
+  return data as Guardrail;
 }
 
 export async function deleteGuardrail(id: string): Promise<boolean> {
-  const stmt = await prepare('DELETE FROM guardrails WHERE id = ?');
-  const result = await stmt.run(id);
-  return result.changes > 0;
+  const { error } = await supabase
+    .from('guardrails')
+    .delete()
+    .eq('id', id);
+  return !error;
 }
 
 export async function checkGuardrails(
@@ -93,7 +98,7 @@ export async function checkGuardrails(
   const violations: string[] = [];
 
   for (const guardrail of guardrails) {
-    const config = JSON.parse(guardrail.config) as Record<string, unknown>;
+    const config = guardrail.config as Record<string, unknown>;
 
     switch (guardrail.type) {
       case 'max_discount': {
@@ -187,7 +192,7 @@ export function formatGuardrailsForPrompt(guardrails: Guardrail[]): string {
   const lines: string[] = ['\n\n## Guardrails (reglas que DEBES seguir estrictamente):'];
 
   for (const g of guardrails) {
-    const config = JSON.parse(g.config) as Record<string, unknown>;
+    const config = g.config as Record<string, unknown>;
 
     switch (g.type) {
       case 'max_discount':

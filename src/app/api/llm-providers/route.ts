@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prepare } from '@/lib/db';
+import { supabase } from '@/lib/db';
 import { LlmProvider } from '@/lib/db/types';
 import { logger } from '@/lib/logger';
 
 export async function GET() {
   try {
-    const stmt = await prepare('SELECT * FROM llm_providers ORDER BY created_at DESC');
-    const providers = (await stmt.all()) as LlmProvider[];
+    const { data, error } = await supabase
+      .from('llm_providers')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw new Error(error.message);
+
     // Don't expose API keys in list
-    const sanitized = providers.map((p) => ({ ...p, api_key: '***' }));
+    const sanitized = ((data as LlmProvider[]) || []).map((p) => ({ ...p, api_key: '***' }));
     return NextResponse.json({ providers: sanitized });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -32,10 +37,17 @@ export async function POST(request: NextRequest) {
 
     const id = `provider_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-    const stmt = await prepare(
-      'INSERT INTO llm_providers (id, name, api_key, base_url, models) VALUES (?, ?, ?, ?, ?)'
-    );
-    await stmt.run(id, name, api_key, base_url || 'https://openrouter.ai/api/v1', JSON.stringify(models || []));
+    const { error } = await supabase
+      .from('llm_providers')
+      .insert({
+        id,
+        name,
+        api_key,
+        base_url: base_url || 'https://openrouter.ai/api/v1',
+        models: models || [],
+      });
+
+    if (error) throw new Error(error.message);
 
     logger.info('llm', `Provider created: ${name}`);
     return NextResponse.json({ id, name }, { status: 201 });

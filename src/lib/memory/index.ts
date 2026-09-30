@@ -1,4 +1,4 @@
-import { getDb, prepare } from '@/lib/db';
+import { supabase } from '@/lib/db';
 import { logger } from '@/lib/logger';
 
 export interface Memory {
@@ -6,7 +6,7 @@ export interface Memory {
   category: string;
   key: string;
   value: string;
-  metadata: string | null;
+  metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -21,43 +21,55 @@ export interface MemoryInput {
 export async function createMemory(input: MemoryInput): Promise<Memory> {
   const id = `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  const stmt = await prepare(
-    'INSERT INTO memories (id, category, key, value, metadata) VALUES (?, ?, ?, ?, ?)'
-  );
-  await stmt.run(
-    id,
-    input.category || 'general',
-    input.key,
-    input.value,
-    input.metadata ? JSON.stringify(input.metadata) : null
-  );
+  const { data, error } = await supabase
+    .from('memories')
+    .insert({
+      id,
+      category: input.category || 'general',
+      key: input.key,
+      value: input.value,
+      metadata: input.metadata || null,
+    })
+    .select()
+    .single();
 
+  if (error) throw new Error(error.message);
   logger.debug('memory', `Memory created: ${input.key}`, { category: input.category });
-  return (await getMemoryById(id))!;
+  return data as Memory;
 }
 
 export async function getMemoryById(id: string): Promise<Memory | null> {
-  const stmt = await prepare('SELECT * FROM memories WHERE id = ?');
-  return ((await stmt.get(id)) as Memory) || null;
+  const { data } = await supabase
+    .from('memories')
+    .select('*')
+    .eq('id', id)
+    .single();
+  return (data as Memory) || null;
 }
 
 export async function getMemories(category?: string, limit = 100): Promise<Memory[]> {
+  let query = supabase
+    .from('memories')
+    .select('*')
+    .order('updated_at', { ascending: false })
+    .limit(limit);
+
   if (category) {
-    const stmt = await prepare('SELECT * FROM memories WHERE category = ? ORDER BY updated_at DESC LIMIT ?');
-    return (await stmt.all(category, limit)) as Memory[];
+    query = query.eq('category', category);
   }
-  const stmt = await prepare('SELECT * FROM memories ORDER BY updated_at DESC LIMIT ?');
-  return (await stmt.all(limit)) as Memory[];
+
+  const { data } = await query;
+  return (data as Memory[]) || [];
 }
 
 export async function searchMemories(query: string, limit = 20): Promise<Memory[]> {
-  const pattern = `%${query}%`;
-  const stmt = await prepare(
-    `SELECT * FROM memories
-     WHERE key LIKE ? OR value LIKE ? OR category LIKE ?
-     ORDER BY updated_at DESC LIMIT ?`
-  );
-  return (await stmt.all(pattern, pattern, pattern, limit)) as Memory[];
+  const { data } = await supabase
+    .from('memories')
+    .select('*')
+    .or(`key.ilike.%${query}%,value.ilike.%${query}%,category.ilike.%${query}%`)
+    .order('updated_at', { ascending: false })
+    .limit(limit);
+  return (data as Memory[]) || [];
 }
 
 export async function updateMemory(
@@ -69,40 +81,31 @@ export async function updateMemory(
     metadata?: Record<string, unknown> | null;
   }
 ): Promise<Memory | null> {
-  const memory = await getMemoryById(id);
-  if (!memory) return null;
+  const { data, error } = await supabase
+    .from('memories')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
 
-  const fields: string[] = [];
-  const values: unknown[] = [];
-
-  if (updates.category !== undefined) { fields.push('category = ?'); values.push(updates.category); }
-  if (updates.key !== undefined) { fields.push('key = ?'); values.push(updates.key); }
-  if (updates.value !== undefined) { fields.push('value = ?'); values.push(updates.value); }
-  if (updates.metadata !== undefined) {
-    fields.push('metadata = ?');
-    values.push(updates.metadata ? JSON.stringify(updates.metadata) : null);
-  }
-
-  if (fields.length === 0) return memory;
-
-  fields.push("updated_at = datetime('now')");
-  values.push(id);
-
-  const stmt = await prepare(`UPDATE memories SET ${fields.join(', ')} WHERE id = ?`);
-  await stmt.run(...values);
-  return getMemoryById(id);
+  if (error) throw new Error(error.message);
+  return data as Memory;
 }
 
 export async function deleteMemory(id: string): Promise<boolean> {
-  const stmt = await prepare('DELETE FROM memories WHERE id = ?');
-  const result = await stmt.run(id);
-  return result.changes > 0;
+  const { error } = await supabase
+    .from('memories')
+    .delete()
+    .eq('id', id);
+  return !error;
 }
 
 export async function getMemoryCategories(): Promise<string[]> {
-  const stmt = await prepare('SELECT DISTINCT category FROM memories');
-  const rows = (await stmt.all()) as Array<{ category: string }>;
-  return rows.map((r) => r.category);
+  const { data } = await supabase
+    .from('memories')
+    .select('category');
+  const categories = (data as Array<{ category: string }>) || [];
+  return [...new Set(categories.map((c) => c.category))];
 }
 
 export function formatMemoriesForPrompt(memories: Memory[]): string {
@@ -113,7 +116,6 @@ export function formatMemoriesForPrompt(memories: Memory[]): string {
 }
 
 export async function getRelevantMemories(conversationText: string, limit = 10): Promise<Memory[]> {
-  // Simple relevance: extract words from conversation and search
   const words = conversationText
     .toLowerCase()
     .split(/\s+/)

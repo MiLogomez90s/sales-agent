@@ -14,7 +14,7 @@ export async function POST(request: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'Tool not found' }, { status: 404 });
     }
 
-    const config = JSON.parse(tool.config);
+    const config = tool.config as unknown as import('@/lib/db/types').ToolConfig;
     if (!isHttpConfig(config)) {
       return NextResponse.json(
         { error: 'Only HTTP tools can be tested directly' },

@@ -1,4 +1,4 @@
-import { getDb, prepare } from '@/lib/db';
+import { supabase } from '@/lib/db';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -15,12 +15,19 @@ export async function log(level: LogLevel, category: string, message: string, me
   if (LEVEL_PRIORITY[level] < LEVEL_PRIORITY[MIN_LEVEL]) return;
 
   try {
-    const stmt = await prepare(
-      'INSERT INTO logs (level, category, message, metadata) VALUES (?, ?, ?, ?)'
-    );
-    await stmt.run(level, category, message, metadata ? JSON.stringify(metadata) : null);
+    const { error } = await supabase
+      .from('logs')
+      .insert({
+        level,
+        category,
+        message,
+        metadata: metadata ? JSON.stringify(metadata) : null,
+      });
+
+    if (error) {
+      console.log(`[${level}] ${category}: ${message}`);
+    }
   } catch {
-    // Fallback to console if DB is unavailable
     console.log(`[${level}] ${category}: ${message}`);
   }
 }

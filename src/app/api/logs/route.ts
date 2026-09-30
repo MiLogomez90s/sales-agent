@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prepare } from '@/lib/db';
+import { supabase } from '@/lib/db';
 import { LogEntry } from '@/lib/db/types';
 
 export async function GET(request: NextRequest) {
@@ -10,28 +10,29 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(parseInt(searchParams.get('limit') || '100', 10), 500);
     const offset = parseInt(searchParams.get('offset') || '0', 10);
 
-    const conditions: string[] = [];
-    const values: unknown[] = [];
+    let query = supabase
+      .from('logs')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
 
     if (level) {
-      conditions.push('level = ?');
-      values.push(level);
+      query = query.eq('level', level);
     }
     if (category) {
-      conditions.push('category = ?');
-      values.push(category);
+      query = query.eq('category', category);
     }
 
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { data, count, error } = await query;
 
-    const logStmt = await prepare(`SELECT * FROM logs ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`);
-    const logs = (await logStmt.all(...values, limit, offset)) as LogEntry[];
+    if (error) throw new Error(error.message);
 
-    const countStmt = await prepare(`SELECT COUNT(*) as count FROM logs ${where}`);
-    const countResult = (await countStmt.get(...values)) as { count: number };
-    const total = countResult.count;
-
-    return NextResponse.json({ logs, total, limit, offset });
+    return NextResponse.json({
+      logs: (data as LogEntry[]) || [],
+      total: count || 0,
+      limit,
+      offset,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ error: message }, { status: 500 });

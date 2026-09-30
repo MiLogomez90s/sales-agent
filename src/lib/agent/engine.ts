@@ -1,4 +1,4 @@
-import { getDb, prepare } from '@/lib/db';
+import { supabase } from '@/lib/db';
 import { AgentConfig, Conversation, Message } from '@/lib/db/types';
 import { chat, buildMessages } from '@/lib/llm/openrouter';
 import { ChatMessage, LLMRequestOptions, ToolCall } from '@/lib/llm/types';
@@ -25,37 +25,56 @@ export interface AgentEvent {
 }
 
 async function getActiveProviderApiKey(): Promise<{ apiKey: string; baseUrl: string } | null> {
-  const stmt = await prepare('SELECT * FROM llm_providers WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1');
-  const provider = (await stmt.get()) as { api_key: string; base_url: string } | undefined;
+  const { data } = await supabase
+    .from('llm_providers')
+    .select('*')
+    .eq('is_active', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
 
-  if (!provider) return null;
-  return { apiKey: provider.api_key, baseUrl: provider.base_url };
+  if (!data) return null;
+  return { apiKey: (data as { api_key: string }).api_key, baseUrl: (data as { base_url: string }).base_url };
 }
 
 async function getConfig(): Promise<AgentConfig> {
-  const stmt = await prepare('SELECT * FROM agent_config WHERE id = 1');
-  return (await stmt.get()) as AgentConfig;
+  const { data } = await supabase
+    .from('agent_config')
+    .select('*')
+    .eq('id', 1)
+    .single();
+  return data as AgentConfig;
 }
 
 async function getOrCreateConversation(conversationId?: string): Promise<Conversation> {
   if (conversationId) {
-    const stmt = await prepare('SELECT * FROM conversations WHERE id = ?');
-    const existing = (await stmt.get(conversationId)) as Conversation | undefined;
-    if (existing) return existing;
+    const { data: existing } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('id', conversationId)
+      .single();
+    if (existing) return existing as Conversation;
   }
 
   const id = conversationId || `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const stmt = await prepare('INSERT INTO conversations (id, title) VALUES (?, ?)');
-  await stmt.run(id, 'Nueva conversación');
-  const selectStmt = await prepare('SELECT * FROM conversations WHERE id = ?');
-  return (await selectStmt.get(id)) as Conversation;
+  const { data, error } = await supabase
+    .from('conversations')
+    .insert({ id, title: 'Nueva conversación' })
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as Conversation;
 }
 
 async function getConversationHistory(conversationId: string): Promise<Message[]> {
-  const stmt = await prepare(
-    'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 50'
-  );
-  return (await stmt.all(conversationId)) as Message[];
+  const { data } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true })
+    .limit(50);
+  return (data as Message[]) || [];
 }
 
 async function saveMessage(
@@ -65,16 +84,17 @@ async function saveMessage(
   toolCalls?: ToolCall[],
   toolCallId?: string
 ): Promise<void> {
-  const stmt = await prepare(
-    'INSERT INTO messages (conversation_id, role, content, tool_calls, tool_call_id) VALUES (?, ?, ?, ?, ?)'
-  );
-  await stmt.run(
-    conversationId,
-    role,
-    content,
-    toolCalls ? JSON.stringify(toolCalls) : null,
-    toolCallId || null
-  );
+  const { error } = await supabase
+    .from('messages')
+    .insert({
+      conversation_id: conversationId,
+      role,
+      content,
+      tool_calls: toolCalls ? JSON.stringify(toolCalls) : null,
+      tool_call_id: toolCallId || null,
+    });
+
+  if (error) throw new Error(error.message);
 }
 
 function messagesToChatMessages(messages: Message[]): ChatMessage[] {
@@ -141,7 +161,6 @@ export async function* runAgent(
   try {
     const response = await chat(provider.apiKey, options, provider.baseUrl);
     const assistantMsg = response.choices[0]?.message;
-    const finishReason = response.choices[0]?.finish_reason;
 
     if (response.usage) {
       usage = {
@@ -176,7 +195,7 @@ export async function* runAgent(
           continue;
         }
 
-        const toolConfig = JSON.parse(tool.config);
+        const toolConfig = tool.config as unknown as import('@/lib/db/types').ToolConfig;
         if (!isHttpConfig(toolConfig)) {
           const errorMsg = `Tool "${toolName}" is not an HTTP tool`;
           yield { type: 'tool_result', data: { name: toolName, success: false, error: errorMsg } };
@@ -248,17 +267,27 @@ export async function* runAgent(
 }
 
 export async function getConversations(): Promise<Conversation[]> {
-  const stmt = await prepare('SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 50');
-  return (await stmt.all()) as Conversation[];
+  const { data } = await supabase
+    .from('conversations')
+    .select('*')
+    .order('updated_at', { ascending: false })
+    .limit(50);
+  return (data as Conversation[]) || [];
 }
 
 export async function getConversationMessages(conversationId: string): Promise<Message[]> {
-  const stmt = await prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC');
-  return (await stmt.all(conversationId)) as Message[];
+  const { data } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true });
+  return (data as Message[]) || [];
 }
 
 export async function deleteConversation(conversationId: string): Promise<boolean> {
-  const stmt = await prepare('DELETE FROM conversations WHERE id = ?');
-  const result = await stmt.run(conversationId);
-  return result.changes > 0;
+  const { error } = await supabase
+    .from('conversations')
+    .delete()
+    .eq('id', conversationId);
+  return !error;
 }
